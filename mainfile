@@ -1,0 +1,296 @@
+import React, { useState } from 'react';
+import { Upload, FileText, Trash2, Download, Loader2 } from 'lucide-react';
+
+const SYSTEM_PROMPT = `You are a document cleaning and information extraction agent.
+
+Your task:
+Extract ONLY important, factual, non-motivational information from the document.
+
+STRICT RULES:
+- Do NOT add explanations, advice, or opinions
+- Do NOT rewrite or rephrase content
+- Do NOT summarize loosely
+- Do NOT add motivation or commentary
+- Do NOT infer intent
+- Do NOT repeat information
+- If information is unclear, omit it
+- Preserve original terminology
+
+WHAT TO KEEP:
+- Definitions
+- Processes
+- Steps
+- Examples
+- Lists
+- Named entities (companies, products, people)
+- Metrics, numbers, constraints
+- Headings that exist in the document
+
+WHAT TO REMOVE:
+- Filler
+- Storytelling
+- Motivation
+- Repetition
+- Analogies (unless explicitly instructional)
+
+OUTPUT FORMAT:
+Use ONLY this structure:
+
+[Heading from document if present]
+- Bullet points with extracted facts
+
+If no headings exist:
+- Use logical section titles based strictly on content
+
+Do not include an introduction or conclusion.
+Do not explain what you did.`;
+
+export default function DocumentCleaner() {
+  const [input, setInput] = useState('');
+  const [output, setOutput] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  const handleFileUpload = async (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setInput(event.target.result);
+      setError('');
+    };
+    reader.onerror = () => {
+      setError('Failed to read file');
+    };
+    reader.readAsText(file);
+  };
+
+  const cleanDocument = async () => {
+    if (!input.trim()) {
+      setError('Please provide document text');
+      return;
+    }
+
+    setLoading(true);
+    setError('');
+    setOutput('');
+
+    try {
+      const response = await fetch('https://api.anthropic.com/v1/messages', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'claude-sonnet-4-20250514',
+          max_tokens: 4000,
+          temperature: 0,
+          system: SYSTEM_PROMPT,
+          messages: [
+            {
+              role: 'user',
+              content: input
+            }
+          ]
+        })
+      });
+
+      if (!response.ok) {
+        throw new Error(`API error: ${response.status}`);
+      }
+
+      const data = await response.json();
+      const extracted = data.content
+        .filter(block => block.type === 'text')
+        .map(block => block.text)
+        .join('\n');
+
+      setOutput(extracted);
+    } catch (err) {
+      setError(err.message || 'Extraction failed');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const downloadFile = (format) => {
+    if (!output) return;
+
+    let content = output;
+    let filename = 'cleaned_document';
+    let mimeType = 'text/plain';
+
+    if (format === 'md') {
+      filename += '.md';
+      mimeType = 'text/markdown';
+    } else if (format === 'json') {
+      filename += '.json';
+      mimeType = 'application/json';
+      const lines = output.split('\n').filter(l => l.trim());
+      const structured = {
+        sections: [],
+        facts: lines.filter(l => l.startsWith('-')).map(l => l.substring(1).trim())
+      };
+      content = JSON.stringify(structured, null, 2);
+    } else {
+      filename += '.txt';
+    }
+
+    const blob = new Blob([content], { type: mimeType });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = filename;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const clear = () => {
+    setInput('');
+    setOutput('');
+    setError('');
+  };
+
+  return (
+    <div className="min-h-screen bg-gradient-to-br from-slate-900 via-slate-800 to-slate-900 text-slate-100 p-6">
+      <div className="max-w-7xl mx-auto">
+        <div className="mb-8">
+          <h1 className="text-3xl font-bold mb-2 text-white">Document Cleaner</h1>
+          <p className="text-slate-400">Extract facts only. No fluff. No commentary.</p>
+        </div>
+
+        <div className="grid lg:grid-cols-2 gap-6">
+          {/* Input Panel */}
+          <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-white">Input Document</h2>
+              <label className="cursor-pointer flex items-center gap-2 px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm transition">
+                <Upload size={16} />
+                Upload
+                <input
+                  type="file"
+                  accept=".txt,.md"
+                  onChange={handleFileUpload}
+                  className="hidden"
+                />
+              </label>
+            </div>
+
+            <textarea
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              placeholder="Paste your messy document here or upload a .txt/.md file..."
+              className="w-full h-96 bg-slate-900/50 border border-slate-600 rounded p-4 text-slate-100 font-mono text-sm resize-none focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+
+            <div className="flex gap-3 mt-4">
+              <button
+                onClick={cleanDocument}
+                disabled={loading || !input.trim()}
+                className="flex-1 flex items-center justify-center gap-2 px-4 py-3 bg-blue-600 hover:bg-blue-500 disabled:bg-slate-700 disabled:cursor-not-allowed rounded font-semibold transition"
+              >
+                {loading ? (
+                  <>
+                    <Loader2 size={18} className="animate-spin" />
+                    Cleaning...
+                  </>
+                ) : (
+                  <>
+                    <FileText size={18} />
+                    Clean Document
+                  </>
+                )}
+              </button>
+
+              <button
+                onClick={clear}
+                disabled={!input && !output}
+                className="px-4 py-3 bg-slate-700 hover:bg-slate-600 disabled:bg-slate-800 disabled:cursor-not-allowed rounded transition"
+              >
+                <Trash2 size={18} />
+              </button>
+            </div>
+
+            {error && (
+              <div className="mt-4 p-3 bg-red-900/30 border border-red-700 rounded text-red-300 text-sm">
+                {error}
+              </div>
+            )}
+          </div>
+
+          {/* Output Panel */}
+          <div className="bg-slate-800/50 backdrop-blur border border-slate-700 rounded-lg p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-white">Cleaned Output</h2>
+              {output && (
+                <div className="flex gap-2">
+                  <button
+                    onClick={() => downloadFile('txt')}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm transition flex items-center gap-1.5"
+                  >
+                    <Download size={14} />
+                    TXT
+                  </button>
+                  <button
+                    onClick={() => downloadFile('md')}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm transition flex items-center gap-1.5"
+                  >
+                    <Download size={14} />
+                    MD
+                  </button>
+                  <button
+                    onClick={() => downloadFile('json')}
+                    className="px-3 py-1.5 bg-slate-700 hover:bg-slate-600 rounded text-sm transition flex items-center gap-1.5"
+                  >
+                    <Download size={14} />
+                    JSON
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="w-full h-96 bg-slate-900/50 border border-slate-600 rounded p-4 overflow-auto">
+              {output ? (
+                <pre className="text-slate-100 font-mono text-sm whitespace-pre-wrap">
+                  {output}
+                </pre>
+              ) : (
+                <div className="h-full flex items-center justify-center text-slate-500">
+                  {loading ? 'Extracting facts...' : 'Cleaned document will appear here'}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+
+        {/* Info */}
+        <div className="mt-6 p-4 bg-slate-800/30 border border-slate-700 rounded-lg">
+          <h3 className="font-semibold mb-2 text-white">What Gets Extracted</h3>
+          <div className="grid md:grid-cols-2 gap-4 text-sm text-slate-300">
+            <div>
+              <div className="text-green-400 font-semibold mb-1">✓ KEEPS</div>
+              <ul className="space-y-0.5 ml-4">
+                <li>• Definitions</li>
+                <li>• Processes & steps</li>
+                <li>• Examples</li>
+                <li>• Metrics & numbers</li>
+                <li>• Named entities</li>
+              </ul>
+            </div>
+            <div>
+              <div className="text-red-400 font-semibold mb-1">✗ REMOVES</div>
+              <ul className="space-y-0.5 ml-4">
+                <li>• Filler & fluff</li>
+                <li>• Motivation & advice</li>
+                <li>• Repetition</li>
+                <li>• Storytelling</li>
+                <li>• Commentary</li>
+              </ul>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
